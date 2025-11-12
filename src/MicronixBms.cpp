@@ -30,9 +30,25 @@ MicronixBms::MicronixBms(ros::NodeHandle& nh)
 
 MicronixBms::~MicronixBms()
 {
-    if (m_canSocket >= 0)
-        close(m_canSocket);
+    try
+    {
+        if (m_canSocket >= 0)
+        {
+            close(m_canSocket);
+            ROS_INFO("MicronixBms: CAN socket closed successfully.");
+            m_canSocket = -1;
+        }
+    }
+    catch (const std::exception& e)
+    {
+        ROS_ERROR("MicronixBms: Exception during destruction: %s", e.what());
+    }
+    catch (...)
+    {
+        ROS_ERROR("MicronixBms: Unknown error during destruction.");
+    }
 }
+
 
 bool MicronixBms::initCan(const std::string& iface)
 {

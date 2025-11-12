@@ -29,9 +29,25 @@ AtcBms::AtcBms(ros::NodeHandle& nh)
 
 AtcBms::~AtcBms()
 {
-    if (m_canSocket >= 0)
-        close(m_canSocket);
+    try
+    {
+        if (m_canSocket >= 0)
+        {
+            close(m_canSocket);
+            ROS_INFO("AtcBms: CAN socket closed successfully.");
+            m_canSocket = -1;
+        }
+    }
+    catch (const std::exception& e)
+    {
+        ROS_ERROR("AtcBms: Exception during destruction: %s", e.what());
+    }
+    catch (...)
+    {
+        ROS_ERROR("AtcBms: Unknown error during destruction.");
+    }
 }
+
 
 bool AtcBms::initCan(const std::string& iface)
 {

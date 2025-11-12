@@ -2,12 +2,12 @@
  * Name: AtcBms.hpp
  * Author: Deepak Rajasekaran
  * Date: 10-Nov-2025
- * Version: 1.0
- * Description: Header file for ATC BMS CAN ROS1 node.
+ * Version: 1.2
+ * Description: Header for ATC BMS CAN ROS1 node with safe destructor.
  */
 
-#ifndef ATC_BMS_HPP
-#define ATC_BMS_HPP
+#ifndef BMS_INTERFACE_ATC_BMS_HPP
+#define BMS_INTERFACE_ATC_BMS_HPP
 
 #include <ros/ros.h>
 #include <sensor_msgs/BatteryState.h>
@@ -18,8 +18,7 @@
 #include <net/if.h>
 #include <unistd.h>
 #include <cstring>
-#include <string>
-#include <cstdint>
+#include <stdexcept>
 
 class AtcBms
 {
@@ -36,7 +35,8 @@ private:
     void parseFrame(const struct can_frame& frame);
     void publishBatteryMsg();
 
-    int m_canSocket;
+private:
+    int m_canSocket{-1};
     ros::Publisher m_batteryPub;
     ros::Rate m_loopRate;
 
@@ -47,8 +47,7 @@ private:
     float m_soc;
     float m_temperature;
     uint16_t m_cycleCount;
-
     bool m_gotInfo;
 };
 
-#endif
+#endif  // BMS_INTERFACE_ATC_BMS_HPP
