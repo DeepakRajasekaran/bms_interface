@@ -1,9 +1,9 @@
 <launch>
   <!-- Read BATTERY_MODEL from environment (default = MICRONIX) -->
-  <arg name="battery_model" default="$(optenv BATTERY_MODEL MICRONIX)" />
+  <arg name="battery_model" default="$(optenv BATTERY_MODEL ATC)" />
 
   <!-- Common topic name to publish battery state -->
-  <arg name="battery_topic" default="/bms/battery_state" />
+  <arg name="battery_topic" default="/battery_state" />
 
   <!-- Launch Micronix BMS node -->
   <group if="$(eval arg('battery_model') == 'MICRONIX')">
@@ -24,4 +24,15 @@
       <remap from="/battery_state" to="$(arg battery_topic)" />
     </node>
   </group>
+
+  <!-- Launch APERION BMS CAN parser node -->
+  <group if="$(eval arg('battery_model') == 'APERION')">
+    <node pkg="bms_interface"
+          type="aperion_bms_node"
+          name="aperion_bms_node"
+          output="screen">
+      <remap from="/battery_state" to="$(arg battery_topic)" />
+    </node>
+  </group>
+
 </launch>
