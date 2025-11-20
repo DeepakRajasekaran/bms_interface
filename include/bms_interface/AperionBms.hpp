@@ -1,6 +1,6 @@
 /*
 Name:      AperionBms.hpp
-Author:    Auto-generated (follow-up to user's request)
+Author:    Deepak Rajasekaran
 Date:      2025-11-18
 Version:   1.0
 Description: Header for AperionBms ROS1 node (APERION protocol parser).
