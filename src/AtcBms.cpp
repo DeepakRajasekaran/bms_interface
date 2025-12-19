@@ -6,194 +6,208 @@
  * Description: Source file implementing ATC BMS CAN ROS1 node.
  */
 
-#include "bms_interface/AtcBms.hpp"
+#include "bms_interface/atc_bms_node.hpp"
 
-AtcBms::AtcBms(ros::NodeHandle& nh)
-    : m_loopRate(2),
-      m_voltage(0), m_current(0),
-      m_capacity(0), m_fullCapacity(0),
-      m_soc(0), m_temperature(0),
-      m_cycleCount(0), m_gotInfo(false)
+#include <net/if.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <cstring>
+
+// ================= CAN IDs (from Python) =================
+static constexpr uint32_t CELL_VOLTAGE_IDS[] = {
+    0x0E640D09, 0x0E650D09, 0x0E660D09, 0x0E670D09,
+    0x0E680D09, 0x0E690D09, 0x0E6A0D09
+};
+
+static constexpr uint32_t GENERAL_INFO_1 = 0x0A6D0D09;
+static constexpr uint32_t GENERAL_INFO_2 = 0x0A6E0D09;
+static constexpr uint32_t WAKEUP_CMD     = 0x0E64090D;
+// =========================================================
+
+AtcBmsNode::AtcBmsNode(ros::NodeHandle& nh, ros::NodeHandle& pnh)
+    : can_socket_(-1),
+      total_voltage_(0.0),
+      current_(0.0),
+      soc_(0.0),
+      remaining_capacity_(0.0),
+      full_capacity_(0.0),
+      wakeup_interval_(0.25)
 {
-    m_batteryPub = nh.advertise<sensor_msgs::BatteryState>("battery_state", 10);
+    pnh.param<std::string>("can_interface", can_iface_, "can0");
+    pnh.param<std::string>("battery_topic", battery_topic_, "/bms/battery_state");
+    pnh.param<double>("publish_rate", publish_rate_, 10.0);
 
-    std::string iface = "can0";
-    if (!initCan(iface))
+    battery_pub_ =
+        nh.advertise<sensor_msgs::BatteryState>(battery_topic_, 10);
+
+    last_wakeup_ = ros::Time(0);
+
+    if (!openCan())
     {
-        ROS_ERROR("AtcBms: Failed to initialize CAN interface %s", iface.c_str());
+        ROS_FATAL("Failed to initialize CAN interface");
         ros::shutdown();
     }
-
-    ROS_INFO("AtcBms: Node initialized on %s", iface.c_str());
 }
 
-AtcBms::~AtcBms()
+AtcBmsNode::~AtcBmsNode()
 {
-    try
-    {
-        if (m_canSocket >= 0)
-        {
-            close(m_canSocket);
-            ROS_INFO("AtcBms: CAN socket closed successfully.");
-            m_canSocket = -1;
-        }
-    }
-    catch (const std::exception& e)
-    {
-        ROS_ERROR("AtcBms: Exception during destruction: %s", e.what());
-    }
-    catch (...)
-    {
-        ROS_ERROR("AtcBms: Unknown error during destruction.");
-    }
+    if (can_socket_ > 0)
+        close(can_socket_);
 }
 
+// ================= CAN SETUP =================
 
-bool AtcBms::initCan(const std::string& iface)
+bool AtcBmsNode::openCan()
 {
-    m_canSocket = socket(PF_CAN, SOCK_RAW, CAN_RAW);
-    if (m_canSocket < 0)
+    struct ifreq ifr{};
+    struct sockaddr_can addr{};
+
+    can_socket_ = socket(PF_CAN, SOCK_RAW, CAN_RAW);
+    if (can_socket_ < 0)
     {
-        perror("Socket");
+        ROS_ERROR("Failed to open CAN socket");
         return false;
     }
 
-    struct ifreq ifr {};
-    std::strncpy(ifr.ifr_name, iface.c_str(), IFNAMSIZ);
-    if (ioctl(m_canSocket, SIOCGIFINDEX, &ifr) < 0)
-    {
-        perror("SIOCGIFINDEX");
-        return false;
-    }
+    std::strncpy(ifr.ifr_name, can_iface_.c_str(), IFNAMSIZ);
+    ioctl(can_socket_, SIOCGIFINDEX, &ifr);
 
-    struct sockaddr_can addr {};
-    addr.can_family = AF_CAN;
+    addr.can_family  = AF_CAN;
     addr.can_ifindex = ifr.ifr_ifindex;
 
-    if (bind(m_canSocket, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+    if (bind(can_socket_, (struct sockaddr*)&addr, sizeof(addr)) < 0)
     {
-        perror("Bind");
+        ROS_ERROR("Failed to bind CAN socket");
         return false;
     }
 
+    ROS_INFO("Connected to CAN interface: %s", can_iface_.c_str());
     return true;
 }
 
-bool AtcBms::sendWakeup()
+// ================= MAIN LOOP =================
+
+void AtcBmsNode::spin()
 {
-    struct can_frame frame {};
-    frame.can_id = 0x0E64090D;  // Wakeup CMD (from ATC protocol)
-    frame.can_dlc = 8;
-    std::memset(frame.data, 0x00, 8);
+    ros::Rate rate(publish_rate_);
 
-    ssize_t nbytes = write(m_canSocket, &frame, sizeof(frame));
-    return (nbytes == sizeof(frame));
-}
-
-void AtcBms::parseFrame(const struct can_frame& frame)
-{
-    // 0x0A6D0D09 → General Info 1 (Voltage, Current, Capacity)
-    if (frame.can_id == 0x0A6D0D09 && frame.can_dlc >= 8)
-    {
-        uint16_t rawVolt = (frame.data[0] << 8) | frame.data[1];
-        uint16_t rawCurr = (frame.data[2] << 8) | frame.data[3];
-        uint16_t rawRemain = (frame.data[4] << 8) | frame.data[5];
-        uint16_t rawFull = (frame.data[6] << 8) | frame.data[7];
-
-        m_voltage = rawVolt * 0.1f;
-        if (rawCurr > 32767)
-            rawCurr -= 65536;
-        m_current = rawCurr * 0.1f;
-        m_capacity = rawRemain * 0.1f;
-        m_fullCapacity = rawFull * 0.1f;
-    }
-
-    // 0x0A6E0D09 → General Info 2 (SOC, Cycles)
-    else if (frame.can_id == 0x0A6E0D09 && frame.can_dlc >= 8)
-    {
-        uint16_t rawSoc = (frame.data[0] << 8) | frame.data[1];
-        m_soc = rawSoc * 0.1f;
-        m_cycleCount = (frame.data[4] << 8) | frame.data[5];
-        m_gotInfo = true;
-    }
-
-    // 0x0A700D09 → General Info 4 (Temperature)
-    else if (frame.can_id == 0x0A700D09 && frame.can_dlc >= 8)
-    {
-        int8_t temp = static_cast<int8_t>(frame.data[0]);
-        m_temperature = static_cast<float>(temp);
-    }
-}
-
-void AtcBms::readFrames()
-{
-    struct can_frame rx {};
-    struct timeval timeout = {0, 100000};
-    fd_set readSet;
-    FD_ZERO(&readSet);
-    FD_SET(m_canSocket, &readSet);
-    select(m_canSocket + 1, &readSet, nullptr, nullptr, &timeout);
-
-    while (FD_ISSET(m_canSocket, &readSet))
-    {
-        ssize_t nbytes = read(m_canSocket, &rx, sizeof(rx));
-        if (nbytes < 0)
-            break;
-
-        parseFrame(rx);
-
-        FD_ZERO(&readSet);
-        FD_SET(m_canSocket, &readSet);
-        select(m_canSocket + 1, &readSet, nullptr, nullptr, &timeout);
-    }
-}
-
-void AtcBms::publishBatteryMsg()
-{
-    if (!m_gotInfo)
-        return;
-
-    sensor_msgs::BatteryState msg;
-    msg.header.stamp = ros::Time::now();
-    msg.present = true;
-    msg.voltage = m_voltage;
-    msg.current = m_current;
-    msg.charge = m_capacity;
-    msg.capacity = m_fullCapacity;
-    msg.percentage = m_soc / 100.0f;
-    msg.temperature = m_temperature;
-
-    msg.power_supply_status =
-        (m_current >= 0) ? sensor_msgs::BatteryState::POWER_SUPPLY_STATUS_CHARGING
-                         : sensor_msgs::BatteryState::POWER_SUPPLY_STATUS_DISCHARGING;
-    msg.power_supply_health =
-        sensor_msgs::BatteryState::POWER_SUPPLY_HEALTH_GOOD;
-    msg.power_supply_technology =
-        sensor_msgs::BatteryState::POWER_SUPPLY_TECHNOLOGY_LION;
-
-    m_batteryPub.publish(msg);
-    m_gotInfo = false;
-}
-
-void AtcBms::spin()
-{
     while (ros::ok())
     {
         sendWakeup();
-        readFrames();
-        publishBatteryMsg();
+        readCanFrame();
+        publishBattery();
+
         ros::spinOnce();
-        m_loopRate.sleep();
+        rate.sleep();
     }
 }
+
+// ================= CAN HANDLING =================
+
+void AtcBmsNode::sendWakeup()
+{
+    if ((ros::Time::now() - last_wakeup_).toSec() < wakeup_interval_)
+        return;
+
+    struct can_frame frame{};
+    frame.can_id  = WAKEUP_CMD | CAN_EFF_FLAG;
+    frame.can_dlc = 8;
+
+    write(can_socket_, &frame, sizeof(frame));
+    last_wakeup_ = ros::Time::now();
+}
+
+void AtcBmsNode::readCanFrame()
+{
+    struct can_frame frame{};
+    int nbytes = read(can_socket_, &frame, sizeof(frame));
+    if (nbytes > 0)
+        parseFrame(frame);
+}
+
+void AtcBmsNode::parseFrame(const struct can_frame& frame)
+{
+    uint32_t id = frame.can_id & CAN_EFF_MASK;
+
+    for (int i = 0; i < 7; i++)
+    {
+        if (id == CELL_VOLTAGE_IDS[i])
+        {
+            parseCellVoltage(i * 4, frame.data);
+            return;
+        }
+    }
+
+    if (id == GENERAL_INFO_1)
+        parseGeneralInfo1(frame.data);
+    else if (id == GENERAL_INFO_2)
+        parseGeneralInfo2(frame.data);
+}
+
+// ================= PARSERS =================
+
+void AtcBmsNode::parseCellVoltage(int start_index, const uint8_t* data)
+{
+    if (cell_voltages_.size() < start_index + 4)
+        cell_voltages_.resize(start_index + 4, 0.0);
+
+    for (int i = 0; i < 4; i++)
+    {
+        uint16_t raw =
+            (data[i * 2] << 8) | data[i * 2 + 1];
+        cell_voltages_[start_index + i] = raw / 1000.0;  // mV → V
+    }
+}
+
+void AtcBmsNode::parseGeneralInfo1(const uint8_t* data)
+{
+    total_voltage_ =
+        ((data[0] << 8) | data[1]) * 0.1;
+
+    int16_t cur =
+        (data[2] << 8) | data[3];
+    current_ = cur * 0.1;
+
+    remaining_capacity_ =
+        ((data[4] << 8) | data[5]) * 0.1;
+
+    full_capacity_ =
+        ((data[6] << 8) | data[7]) * 0.1;
+}
+
+void AtcBmsNode::parseGeneralInfo2(const uint8_t* data)
+{
+    soc_ =
+        ((data[0] << 8) | data[1]) * 0.1 / 100.0;
+}
+
+// ================= ROS PUBLISH =================
+
+void AtcBmsNode::publishBattery()
+{
+    sensor_msgs::BatteryState msg;
+    msg.header.stamp = ros::Time::now();
+    msg.voltage      = total_voltage_;
+    msg.current      = current_;
+    msg.charge       = remaining_capacity_;
+    msg.capacity     = full_capacity_;
+    msg.percentage   = soc_;
+    msg.cell_voltage = cell_voltages_;
+
+    battery_pub_.publish(msg);
+}
+
+// ================= NODE ENTRY =================
 
 int main(int argc, char** argv)
 {
     ros::init(argc, argv, "atc_bms_node");
     ros::NodeHandle nh;
+    ros::NodeHandle pnh("~");
 
-    AtcBms bmsNode(nh);
-    bmsNode.spin();
+    AtcBmsNode node(nh, pnh);
+    node.spin();
 
     return 0;
 }

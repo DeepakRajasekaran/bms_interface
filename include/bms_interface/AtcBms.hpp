@@ -6,48 +6,59 @@
  * Description: Header for ATC BMS CAN ROS1 node with safe destructor.
  */
 
-#ifndef BMS_INTERFACE_ATC_BMS_HPP
-#define BMS_INTERFACE_ATC_BMS_HPP
+#pragma once
 
 #include <ros/ros.h>
 #include <sensor_msgs/BatteryState.h>
+
 #include <linux/can.h>
 #include <linux/can/raw.h>
-#include <sys/socket.h>
-#include <sys/ioctl.h>
-#include <net/if.h>
-#include <unistd.h>
-#include <cstring>
-#include <stdexcept>
 
-class AtcBms
+#include <vector>
+#include <string>
+#include <cstdint>
+
+class AtcBmsNode
 {
 public:
-    explicit AtcBms(ros::NodeHandle& nh);
-    ~AtcBms();
+    AtcBmsNode(ros::NodeHandle& nh, ros::NodeHandle& pnh);
+    ~AtcBmsNode();
 
     void spin();
 
 private:
-    bool initCan(const std::string& iface);
-    bool sendWakeup();
-    void readFrames();
+    // ---------------- ROS ----------------
+    ros::Publisher battery_pub_;
+
+    // ---------------- CAN ----------------
+    int can_socket_;
+    std::string can_iface_;
+
+    // ---------------- Params ----------------
+    std::string battery_topic_;
+    double publish_rate_;
+
+    // ---------------- BMS Data ----------------
+    std::vector<float> cell_voltages_;   // volts
+    float total_voltage_;
+    float current_;
+    float soc_;                           // 0..1
+    float remaining_capacity_;
+    float full_capacity_;
+
+    // ---------------- Wakeup ----------------
+    ros::Time last_wakeup_;
+    double wakeup_interval_;
+
+    // ---------------- Methods ----------------
+    bool openCan();
+    void sendWakeup();
+    void readCanFrame();
     void parseFrame(const struct can_frame& frame);
-    void publishBatteryMsg();
+    void publishBattery();
 
-private:
-    int m_canSocket{-1};
-    ros::Publisher m_batteryPub;
-    ros::Rate m_loopRate;
-
-    float m_voltage;
-    float m_current;
-    float m_capacity;
-    float m_fullCapacity;
-    float m_soc;
-    float m_temperature;
-    uint16_t m_cycleCount;
-    bool m_gotInfo;
+    // ---------------- Parsers ----------------
+    void parseCellVoltage(int start_index, const uint8_t* data);
+    void parseGeneralInfo1(const uint8_t* data);
+    void parseGeneralInfo2(const uint8_t* data);
 };
-
-#endif  // BMS_INTERFACE_ATC_BMS_HPP

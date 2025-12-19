@@ -25,7 +25,11 @@ target_link_libraries(atc_bms_node ${catkin_LIBRARIES})
 add_executable(aperion_bms_node src/AperionBms.cpp)
 target_link_libraries(aperion_bms_node ${catkin_LIBRARIES})
 
-install(TARGETS micronix_bms_node atc_bms_node aperion_bms_node
+add_executable(mel_bms_node src/melLithium1.cpp)
+target_link_libraries(mel_bms_node ${catkin_LIBRARIES})
+
+# Add to install targets
+install(TARGETS micronix_bms_node atc_bms_node mel_bms_node
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

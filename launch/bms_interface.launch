@@ -35,4 +35,13 @@
     </node>
   </group>
 
+<group if="$(eval arg('battery_model') == 'MEL1')">
+  <node pkg="bms_interface"
+        type="mel_bms_node"
+        name="mel_bms_node"
+        output="screen">
+    <remap from="/battery_state" to="$(arg battery_topic)" />
+  </node>
+</group>
+
 </launch>
