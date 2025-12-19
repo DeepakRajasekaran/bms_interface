@@ -2,7 +2,7 @@
  * Name: AtcBms.cpp
  * Author: Deepak Rajasekaran
  * Date: 10-Nov-2025
- * Version: 1.0.1
+ * Version: 1.0
  * Description: Source file implementing ATC BMS CAN ROS1 node.
  */
 
@@ -40,14 +40,6 @@ AtcBmsNode::AtcBmsNode(ros::NodeHandle& nh, ros::NodeHandle& pnh)
 
     battery_pub_ =
         nh.advertise<sensor_msgs::BatteryState>(battery_topic_, 10);
-
-    charge_status_sub_ =
-        nh.subscribe<std_msgs::Bool>(
-            "charge_status",   // topic name
-            10,
-            &AtcBmsNode::chargeStatusCallback,
-            this
-        );
 
     last_wakeup_ = ros::Time(0);
 
@@ -173,14 +165,9 @@ void AtcBmsNode::parseGeneralInfo1(const uint8_t* data)
     total_voltage_ =
         ((data[0] << 8) | data[1]) * 0.1;
 
-
-    int16_t current_raw =
-        static_cast<int16_t>(
-            (static_cast<uint16_t>(data[2]) << 8) |
-             static_cast<uint16_t>(data[3])
-        );
-
-    current_ = current_raw * 0.1;  // charging +ve, discharging -ve
+    int16_t cur =
+        (data[2] << 8) | data[3];
+    current_ = cur * 0.1;
 
     remaining_capacity_ =
         ((data[4] << 8) | data[5]) * 0.1;
@@ -195,19 +182,14 @@ void AtcBmsNode::parseGeneralInfo2(const uint8_t* data)
         ((data[0] << 8) | data[1]) * 0.1 / 100.0;
 }
 
-// ================= ROS CALLBACKS =================
+// ================= ROS PUBLISH =================
 
 void AtcBmsNode::publishBattery()
 {
     sensor_msgs::BatteryState msg;
     msg.header.stamp = ros::Time::now();
     msg.voltage      = total_voltage_;
-
-    if (is_charging_)
-        msg.current = std::abs(current_);
-    else
-        msg.current = -std::abs(current_);
-
+    msg.current      = current_;
     msg.charge       = remaining_capacity_;
     msg.capacity     = full_capacity_;
     msg.percentage   = soc_;
@@ -215,12 +197,6 @@ void AtcBmsNode::publishBattery()
 
     battery_pub_.publish(msg);
 }
-
-void AtcBmsNode::chargeStatusCallback(
-    const std_msgs::Bool::ConstPtr& msg)
-{
-    is_charging_ = msg->data;
-}    
 
 // ================= NODE ENTRY =================
 

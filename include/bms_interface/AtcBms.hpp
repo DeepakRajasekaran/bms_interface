@@ -10,6 +10,7 @@
 
 #include <ros/ros.h>
 #include <sensor_msgs/BatteryState.h>
+#include <std_msgs/Bool.h>
 
 #include <linux/can.h>
 #include <linux/can/raw.h>
@@ -29,6 +30,9 @@ public:
 private:
     // ---------------- ROS ----------------
     ros::Publisher battery_pub_;
+    ros::Subscriber charging_status_sub_;
+
+    bool is_charging_ = false;
 
     // ---------------- CAN ----------------
     int can_socket_;
@@ -61,4 +65,6 @@ private:
     void parseCellVoltage(int start_index, const uint8_t* data);
     void parseGeneralInfo1(const uint8_t* data);
     void parseGeneralInfo2(const uint8_t* data);
+    void chargeStatusCallback(const std_msgs::Bool::ConstPtr& msg);
+
 };
