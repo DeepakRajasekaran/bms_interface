@@ -23,6 +23,14 @@
 #include <string>
 #include <cstdint>
 
+#include <net/if.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <cstring>
+#include <cmath>
+
 class AtcBmsNode
 {
 public:

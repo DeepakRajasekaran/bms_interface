@@ -9,14 +9,6 @@
 
 #include "bms_interface/AtcBms.hpp"
 
-#include <net/if.h>
-#include <sys/ioctl.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <cstring>
-#include <cmath>
-
 // ================= CAN IDs =================
 static constexpr uint32_t CELL_VOLTAGE_IDS[] = {
     0x0E640D09, 0x0E650D09, 0x0E660D09, 0x0E670D09,
