@@ -2,8 +2,9 @@
  * Name: AtcBms.hpp
  * Author: Deepak Rajasekaran
  * Date: 10-Nov-2025
- * Version: 1.2
- * Description: Header for ATC BMS CAN ROS1 node with safe destructor.
+ * Version: 2.0
+ * Description: ATC BMS CAN ROS1 node using
+ *              dedicated CAN IO thread.
  */
 
 #pragma once
@@ -15,6 +16,9 @@
 #include <linux/can.h>
 #include <linux/can/raw.h>
 
+#include <thread>
+#include <mutex>
+#include <unordered_map>
 #include <vector>
 #include <string>
 #include <cstdint>
@@ -28,43 +32,51 @@ public:
     void spin();
 
 private:
-    // ---------------- ROS ----------------
-    ros::Publisher battery_pub_;
-    ros::Subscriber charging_status_sub_;
+    // ================= ROS =================
+    ros::Publisher  m_batteryPub;
+    ros::Subscriber m_chargeStatusSub;
 
-    bool is_charging_ = false;
+    // ================= CAN =================
+    int         m_canSocket;
+    std::string m_canInterface;
 
-    // ---------------- CAN ----------------
-    int can_socket_;
-    std::string can_iface_;
+    std::thread m_canThread;
+    bool        m_runCanThread;
 
-    // ---------------- Params ----------------
-    std::string battery_topic_;
-    double publish_rate_;
+    // Latest CAN frame per ID
+    std::unordered_map<uint32_t, struct can_frame> m_canFrames;
+    std::mutex m_canMutex;
 
-    // ---------------- BMS Data ----------------
-    std::vector<float> cell_voltages_;   // volts
-    float total_voltage_;
-    float current_;
-    float soc_;                           // 0..1
-    float remaining_capacity_;
-    float full_capacity_;
+    // ================= Params =================
+    double m_publishRate;
 
-    // ---------------- Wakeup ----------------
-    ros::Time last_wakeup_;
-    double wakeup_interval_;
+    // ================= BMS Data =================
+    std::vector<float> m_cellVoltages;
+    float m_totalVoltage;
+    float m_currentRaw;
+    float m_soc;
+    float m_remainingCapacity;
+    float m_fullCapacity;
 
-    // ---------------- Methods ----------------
+    bool  m_isCharging;
+
+    // ================= Wakeup =================
+    ros::Time m_lastWakeupTime;
+    double    m_wakeupInterval;
+
+    // ================= Methods =================
     bool openCan();
+    void canThreadLoop();
     void sendWakeup();
-    void readCanFrame();
-    void parseFrame(const struct can_frame& frame);
+
+    void parseStoredFrames();
     void publishBattery();
 
-    // ---------------- Parsers ----------------
-    void parseCellVoltage(int start_index, const uint8_t* data);
-    void parseGeneralInfo1(const uint8_t* data);
-    void parseGeneralInfo2(const uint8_t* data);
+    // ================= Callbacks =================
     void chargeStatusCallback(const std_msgs::Bool::ConstPtr& msg);
 
+    // ================= Parsers =================
+    void parseCellVoltage(uint32_t canId, const uint8_t* data);
+    void parseGeneralInfo1(const uint8_t* data);
+    void parseGeneralInfo2(const uint8_t* data);
 };
