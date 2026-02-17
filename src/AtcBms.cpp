@@ -8,6 +8,7 @@
  */
 
 #include "bms_interface/AtcBms.hpp"
+#include <cerrno>
 
 // ================= CAN IDs =================
 static constexpr uint32_t CELL_VOLTAGE_IDS[] = {
@@ -31,6 +32,8 @@ AtcBmsNode::AtcBmsNode(ros::NodeHandle& nh, ros::NodeHandle& pnh)
       m_isCharging(false),
       m_wakeupInterval(0.25)
 {
+    ROS_INFO("AtcBms: Initializing node...");
+
     pnh.param<std::string>("can_interface", m_canInterface, "can0");
     pnh.param<double>("publish_rate", m_publishRate, 10.0);
 
@@ -42,48 +45,69 @@ AtcBmsNode::AtcBmsNode(ros::NodeHandle& nh, ros::NodeHandle& pnh)
             "charge_status", 10,
             &AtcBmsNode::chargeStatusCallback, this);
 
+    ROS_INFO("AtcBms: Configured on interface %s with rate %.1f Hz", m_canInterface.c_str(), m_publishRate);
+
     if (!openCan())
     {
         ROS_FATAL("Failed to open CAN interface");
         ros::shutdown();
+        return;
     }
 
     m_canThread = std::thread(&AtcBmsNode::canThreadLoop, this);
+    ROS_INFO("AtcBms: CAN thread started.");
 }
 
 AtcBmsNode::~AtcBmsNode()
 {
+    ROS_INFO("AtcBms: Shutting down...");
     m_runCanThread = false;
     if (m_canThread.joinable())
         m_canThread.join();
 
     if (m_canSocket >= 0)
         close(m_canSocket);
+    ROS_INFO("AtcBms: Shutdown complete.");
 }
 
 // ================= CAN SETUP =================
 
 bool AtcBmsNode::openCan()
 {
+    ROS_INFO("AtcBms: Opening CAN socket...");
     struct ifreq ifr{};
     struct sockaddr_can addr{};
 
     m_canSocket = socket(PF_CAN, SOCK_RAW, CAN_RAW);
     if (m_canSocket < 0)
+    {
+        ROS_ERROR("AtcBms: Error creating socket: %s", std::strerror(errno));
         return false;
+    }
 
     int flags = fcntl(m_canSocket, F_GETFL, 0);
     fcntl(m_canSocket, F_SETFL, flags | O_NONBLOCK);
 
     std::strncpy(ifr.ifr_name, m_canInterface.c_str(), IFNAMSIZ);
-    ioctl(m_canSocket, SIOCGIFINDEX, &ifr);
+    if (ioctl(m_canSocket, SIOCGIFINDEX, &ifr) < 0)
+    {
+        ROS_ERROR("AtcBms: Error getting interface index for %s: %s", m_canInterface.c_str(), std::strerror(errno));
+        return false;
+    }
 
     addr.can_family  = AF_CAN;
     addr.can_ifindex = ifr.ifr_ifindex;
 
-    return bind(m_canSocket,
+    if (bind(m_canSocket,
                 (struct sockaddr*)&addr,
-                sizeof(addr)) == 0;
+                sizeof(addr)) < 0)
+    {
+        ROS_ERROR("AtcBms: Error binding socket: %s", std::strerror(errno));
+        return false;
+    }
+
+    ROS_INFO("AtcBms: Socket bound successfully to %s", m_canInterface.c_str());
+    return true;
 }
 
 // ================= CAN THREAD =================
@@ -91,19 +115,44 @@ bool AtcBmsNode::openCan()
 void AtcBmsNode::canThreadLoop()
 {
     struct can_frame frame{};
+    ros::Time lastRecvTime = ros::Time::now();
+    bool noDataWarned = false;
+
+    ROS_INFO("AtcBms: CAN thread loop started.");
 
     while (m_runCanThread)
     {
         sendWakeup();
 
+        bool receivedAny = false;
         while (read(m_canSocket, &frame, sizeof(frame)) > 0)
         {
             std::lock_guard<std::mutex> lock(m_canMutex);
             m_canFrames[frame.can_id & CAN_EFF_MASK] = frame;
+            receivedAny = true;
+        }
+
+        if (receivedAny)
+        {
+            lastRecvTime = ros::Time::now();
+            if (noDataWarned)
+            {
+                ROS_INFO("AtcBms: CAN data resumed.");
+                noDataWarned = false;
+            }
+        }
+        else
+        {
+            if (!noDataWarned && (ros::Time::now() - lastRecvTime).toSec() > 5.0)
+            {
+                ROS_WARN("AtcBms: No CAN data received for 5 seconds on %s", m_canInterface.c_str());
+                noDataWarned = true;
+            }
         }
 
         usleep(1000); // 1 ms
     }
+    ROS_INFO("AtcBms: CAN thread loop stopped.");
 }
 
 void AtcBmsNode::sendWakeup()
@@ -123,6 +172,7 @@ void AtcBmsNode::sendWakeup()
 
 void AtcBmsNode::spin()
 {
+    ROS_INFO("AtcBms: Entering main spin loop.");
     ros::Rate rate(m_publishRate);
 
     while (ros::ok())
@@ -133,6 +183,7 @@ void AtcBmsNode::spin()
         ros::spinOnce();
         rate.sleep();
     }
+    ROS_INFO("AtcBms: Exiting spin loop.");
 }
 
 // ================= PARSING =================
