@@ -42,7 +42,7 @@ AtcBmsNode::AtcBmsNode(ros::NodeHandle& nh, ros::NodeHandle& pnh)
 
     m_chargeStatusSub =
         nh.subscribe<std_msgs::Bool>(
-            "charge_status", 10,
+            "charge_connection", 10,
             &AtcBmsNode::chargeStatusCallback, this);
 
     ROS_INFO("AtcBms: Configured on interface %s with rate %.1f Hz", m_canInterface.c_str(), m_publishRate);
